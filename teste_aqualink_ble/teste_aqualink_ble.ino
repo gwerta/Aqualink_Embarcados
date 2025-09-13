@@ -13,10 +13,11 @@ Adafruit_VL53L0X lox = Adafruit_VL53L0X();
 BLEServer *pServer;
 BLECharacteristic *pCharacteristic;
 
-float alturaGarrafa = 24.0;
-float diametroInterno = 7.8;
+float alturaGarrafa = 24;
+float diametroInterno = 6.8;
+int pinoLDR = 4;  
+int valorLDR = 0;
 float raioInterno = diametroInterno / 2.0;
-float zonaCega = 4.0; // cm zona cega do sensor
 
 float aguaInicial = -1; // volume inicial em mL (na primeira medição)
 float mlConsumidosAcumulado = 0; // acumulado do consumo
@@ -27,19 +28,19 @@ String realizarLeituras() {
   float somaDistancias = 0;
   int leiturasValidas = 0;
 
-  for (int i = 0; i < 10; i++) {
+  for (int i = 0; i < 50; i++) {
     VL53L0X_RangingMeasurementData_t measure;
     lox.rangingTest(&measure, false);
 
     if (measure.RangeStatus != 4) {
-      float distancia = (measure.RangeMilliMeter / 10.0) - zonaCega;
+      float distancia = (measure.RangeMilliMeter / 10.0);
       if (distancia < 0) distancia = 0;
 
       somaDistancias += distancia;
       leiturasValidas++;
     }
 
-    delay(200);
+    delay(50);
   }
 
   if (leiturasValidas == 0) {
@@ -69,19 +70,17 @@ String realizarLeituras() {
   // Atualiza última medição
   aguaUltimaMedida = aguaNaGarrafa;
 
-  char buffer[256];
-  snprintf(buffer, sizeof(buffer),
-           "Média distância: %.1f cm\nVolume estimado: %.1f mL\nConsumo desta vez: %.1f mL\nConsumo acumulado: %.1f mL",
-           mediaDistancia, aguaNaGarrafa, consumoAtual, mlConsumidosAcumulado);
-
-  return String(buffer);
+ char buffer[128];
+snprintf(buffer, sizeof(buffer),
+         "{\"distancia\":%.1f,\"volume\":%.1f,\"consumo\":%.1f,\"acumulado\":%.1f}",
+         mediaDistancia, aguaNaGarrafa, consumoAtual, mlConsumidosAcumulado);
+   return String(buffer);
 }
-
 
 // Callback BLE para receber comandos do celular
 class MyCallbacks : public BLECharacteristicCallbacks {
 void onWrite(BLECharacteristic *pCharacteristic) {
-  String comando = pCharacteristic->getValue();  // pega direto como Arduino String
+  String comando = pCharacteristic->getValue();  
   comando.trim();
 
   String resposta;
@@ -109,7 +108,7 @@ void onWrite(BLECharacteristic *pCharacteristic) {
 void setup() {
   Serial.begin(115200);
 
-  Wire.begin(8, 9); // ajuste seus pinos SDA e SCL se precisar
+  Wire.begin(8, 9); 
 
   if (!lox.begin()) {
     Serial.println("Falha ao iniciar VL53L0X");
@@ -117,6 +116,7 @@ void setup() {
   }
 
   BLEDevice::init("ESP32C3_AquaLink");
+  BLEDevice::setMTU(517);
   pServer = BLEDevice::createServer();
   BLEService *pService = pServer->createService(SERVICE_UUID);
 
@@ -140,6 +140,10 @@ void setup() {
   Serial.println("BLE pronto. Conecte pelo celular.");
 }
 
+
+
 void loop() {
-  // Não precisa de nada no loop, o BLE roda via callback
+ 
 }
+
+
