@@ -20,10 +20,7 @@ int valorLDR = 0;
 float raioInterno = diametroInterno / 2.0;
 
 float aguaInicial = -1; // volume inicial em mL (na primeira medição)
-
 float aguaUltimaMedida = -1; // volume da última medição
-
-bool primeiraConexaoIgnorada = false;
 
 String realizarLeituras() {
   float somaDistancias = 0;
@@ -64,55 +61,37 @@ String realizarLeituras() {
     aguaUltimaMedida = aguaNaGarrafa; // primeira leitura
   }
 
-  // Consumo baseado na última medição
-  float consumoAtual = aguaUltimaMedida - aguaNaGarrafa;
-  if (consumoAtual < 0) consumoAtual = 0; // evita valores negativos
 
-
-  // Atualiza última medição
   aguaUltimaMedida = aguaNaGarrafa;
 
- char buffer[128];
-snprintf(buffer, sizeof(buffer),
-         "{\"distancia\":%.1f,\"volume\":%.1f,\"consumo\":%.1f}",
-         mediaDistancia, aguaNaGarrafa, consumoAtual);
-   return String(buffer);
+  char buffer[128];
+  snprintf(buffer, sizeof(buffer),
+           "{\"distancia\":%.1f,\"volume\":%.1f}",
+           mediaDistancia, aguaNaGarrafa);
+  return String(buffer);
 }
-
-class MyServerCallbacks: public BLEServerCallbacks {
-  void onConnect(BLEServer* pServer) {
-    if (!primeiraConexaoIgnorada) {
-      primeiraConexaoIgnorada = true;
-      Serial.println("Primeira conexão ignorada");
-      pServer->disconnect(pServer->getConnId());
-    } else {
-      Serial.println("Conexão aceita");
-    }
-  }
-};
 
 // Callback BLE para receber comandos do celular
 class MyCallbacks : public BLECharacteristicCallbacks {
-void onWrite(BLECharacteristic *pCharacteristic) {
-  String comando = pCharacteristic->getValue();  
-  comando.trim();
+  void onWrite(BLECharacteristic *pCharacteristic) {
+    String comando = pCharacteristic->getValue();  
+    comando.trim();
 
-  String resposta;
+    String resposta;
 
-  if (comando == "1") {
-    resposta = realizarLeituras();
-  } else {
-    resposta = "Comando inválido. Envie '1' para leituras.";
+    if (comando == "1") {
+      resposta = realizarLeituras();
+    } else {
+      resposta = "Comando inválido. Envie '1' para leituras.";
+    }
+
+    pCharacteristic->setValue(resposta.c_str());
+    pCharacteristic->notify();
+
+    Serial.println("Resposta enviada via BLE:");
+    Serial.println(resposta);
+    Serial.println("-------------------------");
   }
-
-  pCharacteristic->setValue(resposta.c_str());
-  pCharacteristic->notify();
-
-  Serial.println("Resposta enviada via BLE:");
-  Serial.println(resposta);
-  Serial.println("-------------------------");
-}
-
 };
 
 void setup() {
@@ -128,6 +107,8 @@ void setup() {
   BLEDevice::init("ESP32C3_AquaLink");
   BLEDevice::setMTU(517);
   pServer = BLEDevice::createServer();
+  // Não usamos mais callbacks para desconexão automática
+
   BLEService *pService = pServer->createService(SERVICE_UUID);
 
   pCharacteristic = pService->createCharacteristic(
@@ -137,7 +118,7 @@ void setup() {
     BLECharacteristic::PROPERTY_NOTIFY
   );
 
-  pCharacteristic->setValue("Pronto para comandos: '1' = leituras, '0' = zerar consumo");
+  pCharacteristic->setValue("Pronto para comandos: '1' = leituras");
   pCharacteristic->setCallbacks(new MyCallbacks());
 
   pService->start();
@@ -151,10 +132,6 @@ void setup() {
   Serial.println("BLE pronto. Conecte pelo celular.");
 }
 
-
-
 void loop() {
- 
+  // Nada a fazer no loop principal
 }
-
-
