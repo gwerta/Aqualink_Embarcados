@@ -13,16 +13,17 @@ Adafruit_VL53L0X lox = Adafruit_VL53L0X();
 BLEServer *pServer;
 BLECharacteristic *pCharacteristic;
 
-float alturaGarrafa = 24;
-float diametroInterno = 6.8;
+float alturaGarrafa = 29.4;
+float diametroInterno = 6.7;
 int pinoLDR = 4;  
 int valorLDR = 0;
 float raioInterno = diametroInterno / 2.0;
 
 float aguaInicial = -1; // volume inicial em mL (na primeira medição)
-float mlConsumidosAcumulado = 0; // acumulado do consumo
 
 float aguaUltimaMedida = -1; // volume da última medição
+
+bool primeiraConexaoIgnorada = false;
 
 String realizarLeituras() {
   float somaDistancias = 0;
@@ -47,7 +48,10 @@ String realizarLeituras() {
     return "Nenhuma leitura válida obtida.";
   }
 
-  float mediaDistancia = somaDistancias / leiturasValidas;
+  float mediaDistancia = somaDistancias / leiturasValidas - 3.5;
+  if (mediaDistancia >= 26.3){
+    mediaDistancia += 3.5;
+  }
   float alturaAgua = alturaGarrafa - mediaDistancia;
   if (alturaAgua < 0) alturaAgua = 0;
 
@@ -64,18 +68,28 @@ String realizarLeituras() {
   float consumoAtual = aguaUltimaMedida - aguaNaGarrafa;
   if (consumoAtual < 0) consumoAtual = 0; // evita valores negativos
 
-  // Acumula no total
-  mlConsumidosAcumulado += consumoAtual;
 
   // Atualiza última medição
   aguaUltimaMedida = aguaNaGarrafa;
 
  char buffer[128];
 snprintf(buffer, sizeof(buffer),
-         "{\"distancia\":%.1f,\"volume\":%.1f,\"consumo\":%.1f,\"acumulado\":%.1f}",
-         mediaDistancia, aguaNaGarrafa, consumoAtual, mlConsumidosAcumulado);
+         "{\"distancia\":%.1f,\"volume\":%.1f,\"consumo\":%.1f}",
+         mediaDistancia, aguaNaGarrafa, consumoAtual);
    return String(buffer);
 }
+
+class MyServerCallbacks: public BLEServerCallbacks {
+  void onConnect(BLEServer* pServer) {
+    if (!primeiraConexaoIgnorada) {
+      primeiraConexaoIgnorada = true;
+      Serial.println("Primeira conexão ignorada");
+      pServer->disconnect(pServer->getConnId());
+    } else {
+      Serial.println("Conexão aceita");
+    }
+  }
+};
 
 // Callback BLE para receber comandos do celular
 class MyCallbacks : public BLECharacteristicCallbacks {
@@ -87,12 +101,8 @@ void onWrite(BLECharacteristic *pCharacteristic) {
 
   if (comando == "1") {
     resposta = realizarLeituras();
-  } else if (comando == "0") {
-    mlConsumidosAcumulado = 0;
-    aguaInicial = -1;
-    resposta = "Consumo acumulado zerado.";
   } else {
-    resposta = "Comando inválido. Envie '1' para leituras ou '0' para zerar.";
+    resposta = "Comando inválido. Envie '1' para leituras.";
   }
 
   pCharacteristic->setValue(resposta.c_str());
@@ -135,6 +145,7 @@ void setup() {
   BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
   pAdvertising->setScanResponse(true);
   pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->setName("ESP32C3_AquaLink");
   BLEDevice::startAdvertising();
 
   Serial.println("BLE pronto. Conecte pelo celular.");
