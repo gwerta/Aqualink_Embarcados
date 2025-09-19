@@ -3,27 +3,48 @@
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEServer.h>
+#include <driver/adc.h>
 
-// UUIDs para BLE
-#define SERVICE_UUID "12345678-1234-1234-1234-1234567890ab"
+// ---------- UUIDs BLE ----------
+#define SERVICE_UUID        "12345678-1234-1234-1234-1234567890ab"
 #define CHARACTERISTIC_UUID "abcd1234-ab12-cd34-ef56-1234567890ab"
 
-Adafruit_VL53L0X lox = Adafruit_VL53L0X();
-
+Adafruit_VL53L0X lox;
 BLEServer *pServer;
 BLECharacteristic *pCharacteristic;
 
-float alturaGarrafa = 29.4;
+// ---------- Sensor garrafa ----------
+float alturaGarrafa   = 29.4;
 float diametroInterno = 6.7;
-int pinoLDR = 4;
-int valorLDR = 0;
-float raioInterno = diametroInterno / 2.0;
+int   pinoLDR         = 4;
+float raioInterno     = 6.7 / 2.0;
 
-float aguaInicial = -1;       // volume inicial em mL (na primeira medição)
-float aguaUltimaMedida = -1;  // volume da última medição
+float aguaInicial      = -1;
+float aguaUltimaMedida = -1;
 
+// ---------- Bateria ----------
+const int   PINO_BAT = 0;        // A0 / GPIO0
+const float R1 = 100000.0;       // divisor superior
+const float R2 = 100000.0;       // divisor inferior
+
+float lerBateriaVolts() {
+  uint32_t mv = analogReadMilliVolts(PINO_BAT);
+  return (mv / 1000.0) * (R1 + R2) / R2;
+}
+
+// mapeia 4.1–4.0 = 100% e cai 10% a cada 0.1 V
+float bateriaPercent(float v) {
+  if (v >= 4.0) return 100.0;
+  if (v < 3.0)  return 0.0;
+  int step = (int)((v - 3.0) / 0.1 + 0.5);
+  if (step > 9) step = 9;
+  if (step < 0) step = 0;
+  return step * 10.0;
+}
+
+// ---------- Funções ----------
 String realizarLeituras() {
-  float somaDistancias = 0;
+  float somaDist = 0;
   int leiturasValidas = 0;
 
   for (int i = 0; i < 50; i++) {
@@ -31,52 +52,46 @@ String realizarLeituras() {
     lox.rangingTest(&measure, false);
 
     if (measure.RangeStatus != 4) {
-      float distancia = (measure.RangeMilliMeter / 10.0);
-      if (distancia < 0) distancia = 0;
-
-      somaDistancias += distancia;
+      float d = (measure.RangeMilliMeter / 10.0);
+      if (d < 0) d = 0;
+      somaDist += d;
       leiturasValidas++;
     }
-
     delay(50);
   }
 
-  if (leiturasValidas == 0) {
-    return "Nenhuma leitura válida obtida.";
-  }
+  if (leiturasValidas == 0) return "Nenhuma leitura válida obtida.";
 
-  float mediaDistancia = somaDistancias / leiturasValidas - 3.5;
-  if (mediaDistancia >= 26.5) {
-    mediaDistancia += 3.5;
-  }
+  float mediaDistancia = somaDist / leiturasValidas - 3.5;
+  if (mediaDistancia >= 26.5) mediaDistancia += 3.5;
+
   float alturaAgua = alturaGarrafa - mediaDistancia;
   if (alturaAgua < 0) alturaAgua = 0;
 
   float aguaNaGarrafa = 3.14159 * raioInterno * raioInterno * alturaAgua;
 
-  if (aguaInicial < 0) {
-    aguaInicial = aguaNaGarrafa;
-  }
-  if (aguaUltimaMedida < 0) {
-    aguaUltimaMedida = aguaNaGarrafa;  // primeira leitura
-  }
-
+  if (aguaInicial < 0)      aguaInicial      = aguaNaGarrafa;
+  if (aguaUltimaMedida < 0) aguaUltimaMedida = aguaNaGarrafa;
 
   aguaUltimaMedida = aguaNaGarrafa;
 
-  char buffer[128];
+  // ---- Bateria ----
+  float vbat  = lerBateriaVolts();
+  float pbat  = bateriaPercent(vbat);
+
+  char buffer[160];
   snprintf(buffer, sizeof(buffer),
-           "{\"distancia\":%.1f,\"volume\":%.1f}",
-           mediaDistancia, aguaNaGarrafa);
+           "{\"distancia\":%.1f,\"volume\":%.1f,\"bateria_v\":%.2f,\"bateria_pct\":%.0f}",
+           mediaDistancia, aguaNaGarrafa, vbat, pbat);
+
   return String(buffer);
 }
 
-// Callback BLE para receber comandos do celular
+// ---------- Callbacks ----------
 class MyCallbacks : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic *pCharacteristic) {
-    String comando = pCharacteristic->getValue();
+  void onWrite(BLECharacteristic *pChar) {
+    String comando = pChar->getValue();
     comando.trim();
-
     String resposta;
 
     if (comando == "1") {
@@ -85,24 +100,32 @@ class MyCallbacks : public BLECharacteristicCallbacks {
       resposta = "Comando inválido. Envie '1' para leituras.";
     }
 
-    pCharacteristic->setValue(resposta.c_str());
-    pCharacteristic->notify();
+    pChar->setValue(resposta.c_str());
+    pChar->notify();
 
     Serial.println("Resposta enviada via BLE:");
     Serial.println(resposta);
     Serial.println("-------------------------");
   }
 };
+
 class MyServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer *pServer) {
     Serial.println("Dispositivo conectado!");
   }
   void onDisconnect(BLEServer *pServer) {
     Serial.println("Dispositivo desconectado! Reiniciando advertising...");
+
+    // --- imprime estado da bateria a cada reinício ---
+    float vbat  = lerBateriaVolts();
+    float pbat  = bateriaPercent(vbat);
+    Serial.printf("Status bateria: %.2f V  (%.0f%%)\n", vbat, pbat);
+
     pServer->getAdvertising()->start();
   }
 };
 
+// ---------- Setup ----------
 void setup() {
   Serial.begin(115200);
   Wire.begin(8, 9);
@@ -112,6 +135,9 @@ void setup() {
     while (1);
   }
 
+  analogReadResolution(12);
+  analogSetPinAttenuation(PINO_BAT, ADC_11db);
+
   BLEDevice::init("ESP32C3_AquaLink");
   BLEDevice::setMTU(517);
 
@@ -119,7 +145,6 @@ void setup() {
   pServer->setCallbacks(new MyServerCallbacks());
 
   BLEService *pService = pServer->createService(SERVICE_UUID);
-
   pCharacteristic = pService->createCharacteristic(
     CHARACTERISTIC_UUID,
     BLECharacteristic::PROPERTY_READ |
@@ -132,29 +157,29 @@ void setup() {
 
   pService->start();
 
-  // Advertising a partir do servidor (agora pServer já existe)
   BLEAdvertising *pAdvertising = pServer->getAdvertising();
   pAdvertising->setScanResponse(true);
   pAdvertising->addServiceUUID(SERVICE_UUID);
   pAdvertising->setName("ESP32C3_AquaLink");
-
-  // Sugestão: pedir intervalos de conexão menores (valores padrão em unidades de 1.25ms)
-  // 0x06 -> 7.5 ms  ; 0x12 -> 37.5 ms (ajuste conforme desejar)
   pAdvertising->setMinPreferred(0x06);
   pAdvertising->setMaxPreferred(0x12);
-
   pAdvertising->start();
-
+  delay(500);
   Serial.println("BLE pronto. Conecte pelo celular.");
+
+  float vbat  = lerBateriaVolts();
+  float pbat  = bateriaPercent(vbat);
+  Serial.printf("Status bateria: %.2f V  (%.0f%%)\n", vbat, pbat);
+  
 }
 
+// ---------- Loop ----------
 unsigned long lastCheck = 0;
 void loop() {
-  // Watchdog simples para garantir que o advertising esteja ativo
+
   if (millis() - lastCheck > 1000) {
     lastCheck = millis();
     if (pServer && pServer->getConnectedCount() == 0) {
-      // start() é idempotente — garante que o dispositivo anuncie
       pServer->getAdvertising()->start();
     }
   }
