@@ -16,23 +16,23 @@ BLECharacteristic *pCharacteristic;
 // ---------- Sensor garrafa ----------
 float alturaGarrafa   = 29.4;
 float diametroInterno = 6.7;
-int   pinoLDR         = 4;
+int   pinoLDR         = 1;  // LDR no GPIO1
 float raioInterno     = 6.7 / 2.0;
 
 float aguaInicial      = -1;
 float aguaUltimaMedida = -1;
 
 // ---------- Bateria ----------
-const int   PINO_BAT = 0;        // A0 / GPIO0
-const float R1 = 10000.0;       // divisor superior
-const float R2 = 10000.0;       // divisor inferior
+const int PINO_BAT = 0;  // GPIO0
+const float R1 = 10000.0;
+const float R2 = 10000.0;
 
+// ---------- Funções ----------
 float lerBateriaVolts() {
   uint32_t mv = analogReadMilliVolts(PINO_BAT);
   return (mv / 1000.0) * (R1 + R2) / R2;
 }
 
-// mapeia 4.1–4.0 = 100% e cai 10% a cada 0.1 V
 float bateriaPercent(float v) {
   if (v >= 4.0) return 100.0;
   if (v < 3.0)  return 0.0;
@@ -42,7 +42,12 @@ float bateriaPercent(float v) {
   return step * 10.0;
 }
 
-// ---------- Funções ----------
+float lerLDRPercent() {
+  int valor = analogRead(pinoLDR);
+  return valor / 4095.0 * 100.0;
+}
+
+// Leitura do VL53L0X
 String realizarLeituras() {
   float somaDist = 0;
   int leiturasValidas = 0;
@@ -52,7 +57,7 @@ String realizarLeituras() {
     lox.rangingTest(&measure, false);
 
     if (measure.RangeStatus != 4) {
-      float d = (measure.RangeMilliMeter / 10.0);
+      float d = measure.RangeMilliMeter / 10.0;
       if (d < 0) d = 0;
       somaDist += d;
       leiturasValidas++;
@@ -75,14 +80,14 @@ String realizarLeituras() {
 
   aguaUltimaMedida = aguaNaGarrafa;
 
-  // ---- Bateria ----
-  float vbat  = lerBateriaVolts();
-  float pbat  = bateriaPercent(vbat);
+  float vbat   = lerBateriaVolts();
+  float pbat   = bateriaPercent(vbat);
+  float ldrPct = lerLDRPercent();
 
-  char buffer[160];
+  char buffer[200];
   snprintf(buffer, sizeof(buffer),
-           "{\"distancia\":%.1f,\"volume\":%.1f,\"bateria_v\":%.2f,\"bateria_pct\":%.0f}",
-           mediaDistancia, aguaNaGarrafa, vbat, pbat);
+           "{\"distancia\":%.1f,\"volume\":%.1f,\"bateria_v\":%.2f,\"bateria_pct\":%.0f,\"ldr_pct\":%.1f}",
+           mediaDistancia, aguaNaGarrafa, vbat, pbat, ldrPct);
 
   return String(buffer);
 }
@@ -115,12 +120,9 @@ class MyServerCallbacks : public BLEServerCallbacks {
   }
   void onDisconnect(BLEServer *pServer) {
     Serial.println("Dispositivo desconectado! Reiniciando advertising...");
-
-    // --- imprime estado da bateria a cada reinício ---
     float vbat  = lerBateriaVolts();
     float pbat  = bateriaPercent(vbat);
     Serial.printf("Status bateria: %.2f V  (%.0f%%)\n", vbat, pbat);
-
     pServer->getAdvertising()->start();
   }
 };
@@ -137,6 +139,7 @@ void setup() {
 
   analogReadResolution(12);
   analogSetPinAttenuation(PINO_BAT, ADC_11db);
+  analogSetPinAttenuation(pinoLDR, ADC_11db);
 
   BLEDevice::init("ESP32C3_AquaLink");
   BLEDevice::setMTU(517);
@@ -164,26 +167,34 @@ void setup() {
   pAdvertising->setMinPreferred(0x06);
   pAdvertising->setMaxPreferred(0x12);
   pAdvertising->start();
+
   delay(500);
   Serial.println("BLE pronto. Conecte pelo celular.");
 
   float vbat  = lerBateriaVolts();
   float pbat  = bateriaPercent(vbat);
-  Serial.printf("Status bateria: %.2f V  (%.0f%%)\n", vbat, pbat);
-  
+  float ldrPct = lerLDRPercent();
+  Serial.printf("Status bateria: %.2f V  (%.0f%%), LDR: %.1f%%\n", vbat, pbat, ldrPct);
 }
 
 // ---------- Loop ----------
 unsigned long lastCheck = 0;
-void loop() {
+unsigned long lastLDR   = 0;
 
+void loop() {
+  // --- Verificação do server BLE ---
   if (millis() - lastCheck > 1000) {
     lastCheck = millis();
     if (pServer && pServer->getConnectedCount() == 0) {
       pServer->getAdvertising()->start();
     }
-    float vbat  = lerBateriaVolts();
-  float pbat  = bateriaPercent(vbat);
-  Serial.printf("Status bateria: %.2f V  (%.0f%%)\n", vbat, pbat);
+  }
+
+
+  if (millis() - lastLDR > 10000) {
+    lastLDR = millis();
+    float ldrPct = lerLDRPercent();
+    int valorLDR = analogRead(pinoLDR);
+    Serial.printf("Valor LDR: %d  (%.2f%%)\n", valorLDR, ldrPct);
   }
 }
