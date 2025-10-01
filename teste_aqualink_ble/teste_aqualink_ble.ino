@@ -24,8 +24,8 @@ float aguaUltimaMedida = -1;
 
 // ---------- Bateria ----------
 const int   PINO_BAT = 0;        // A0 / GPIO0
-const float R1 = 100000.0;       // divisor superior
-const float R2 = 100000.0;       // divisor inferior
+const float R1 = 10000.0;       // divisor superior
+const float R2 = 10000.0;       // divisor inferior
 
 float lerBateriaVolts() {
   uint32_t mv = analogReadMilliVolts(PINO_BAT);
@@ -128,7 +128,7 @@ class MyServerCallbacks : public BLEServerCallbacks {
 // ---------- Setup ----------
 void setup() {
   Serial.begin(115200);
-  Wire.begin(8, 9);
+  Wire.begin(4, 3);
 
   if (!lox.begin()) {
     Serial.println("Falha ao iniciar VL53L0X");
@@ -182,5 +182,8 @@ void loop() {
     if (pServer && pServer->getConnectedCount() == 0) {
       pServer->getAdvertising()->start();
     }
+    float vbat  = lerBateriaVolts();
+  float pbat  = bateriaPercent(vbat);
+  Serial.printf("Status bateria: %.2f V  (%.0f%%)\n", vbat, pbat);
   }
 }
