@@ -14,7 +14,7 @@ BLEServer *pServer;
 BLECharacteristic *pCharacteristic;
 
 // ---------- Sensor garrafa ----------
-float alturaGarrafa   = 29.4;
+float alturaGarrafa   = 24;
 float diametroInterno = 6.7;
 int   pinoLDR         = 1;  // LDR no GPIO1
 float raioInterno     = 6.7 / 2.0;
@@ -68,7 +68,7 @@ String realizarLeituras() {
   if (leiturasValidas == 0) return "Nenhuma leitura válida obtida.";
 
   float mediaDistancia = somaDist / leiturasValidas - 3.5;
-  if (mediaDistancia >= 26.5) mediaDistancia += 3.5;
+  if (mediaDistancia >= 21.1) mediaDistancia += 3.5;
 
   float alturaAgua = alturaGarrafa - mediaDistancia;
   if (alturaAgua < 0) alturaAgua = 0;
@@ -187,6 +187,7 @@ void loop() {
     lastCheck = millis();
     if (pServer && pServer->getConnectedCount() == 0) {
       pServer->getAdvertising()->start();
+
     }
   }
 
