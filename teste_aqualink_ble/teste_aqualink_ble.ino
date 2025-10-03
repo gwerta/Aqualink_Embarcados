@@ -6,8 +6,8 @@
 #include <driver/adc.h>
 
 // ---------- UUIDs BLE ----------
-#define SERVICE_UUID        "12345678-1234-1234-1234-1234567890ab"
-#define CHARACTERISTIC_UUID "abcd1234-ab12-cd34-ef56-1234567890ab"
+#define SERVICE_UUID        "34303c72-4cb1-4d48-98cb-781afece9cd7"
+#define CHARACTERISTIC_UUID "5b4ff54f-8297-45b4-9949-7ff95e672aae"
 
 Adafruit_VL53L0X lox;
 BLEServer *pServer;
