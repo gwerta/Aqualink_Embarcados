@@ -28,10 +28,16 @@ const float R1 = 10000.0;
 const float R2 = 10000.0;
 
 // ---------- Funções ----------
-float lerBateriaVolts() {
+
+  float lerBateriaVolts() {
   uint32_t mv = analogReadMilliVolts(PINO_BAT);
-  return (mv / 1000.0) * (R1 + R2) / R2;
+  float adcVolts = mv / 1000.0;
+  
+  // Aplica fator de correção
+  adcVolts *= 0.77;  // ajusta a leitura
+  return adcVolts * (R1 + R2) / R2;
 }
+
 
 float bateriaPercent(float v) {
   if (v >= 4.0) return 100.0;
