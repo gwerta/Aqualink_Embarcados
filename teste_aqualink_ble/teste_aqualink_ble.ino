@@ -16,14 +16,14 @@ BLECharacteristic *pCharacteristic;
 // ---------- Sensor garrafa ----------
 float alturaGarrafa   = 24;
 float diametroInterno = 6.7;
-int   pinoLDR         = 1;  // LDR no GPIO1
+int   pinoLDR         = 4;
 float raioInterno     = 6.7 / 2.0;
 
 float aguaInicial      = -1;
 float aguaUltimaMedida = -1;
 
 // ---------- Bateria ----------
-const int PINO_BAT = 0;  // GPIO0
+const int PINO_BAT = 0;  
 const float R1 = 10000.0;
 const float R2 = 10000.0;
 
@@ -32,10 +32,7 @@ const float R2 = 10000.0;
   float lerBateriaVolts() {
   uint32_t mv = analogReadMilliVolts(PINO_BAT);
   float adcVolts = mv / 1000.0;
-  
-  // Aplica fator de correção
-  adcVolts *= 0.77;  // ajusta a leitura
-  return adcVolts * (R1 + R2) / R2;
+  return adcVolts * ((R1 + R2) / R2) -0.1;
 }
 
 
@@ -136,7 +133,7 @@ class MyServerCallbacks : public BLEServerCallbacks {
 // ---------- Setup ----------
 void setup() {
   Serial.begin(115200);
-  Wire.begin(4, 3);
+  Wire.begin(5, 6);
 
   if (!lox.begin()) {
     Serial.println("Falha ao iniciar VL53L0X");
@@ -197,11 +194,4 @@ void loop() {
     }
   }
 
-
-  if (millis() - lastLDR > 10000) {
-    lastLDR = millis();
-    float ldrPct = lerLDRPercent();
-    int valorLDR = analogRead(pinoLDR);
-    Serial.printf("Valor LDR: %d  (%.2f%%)\n", valorLDR, ldrPct);
-  }
 }
