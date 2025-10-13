@@ -14,10 +14,10 @@ BLEServer *pServer;
 BLECharacteristic *pCharacteristic;
 
 // ---------- Sensor garrafa ----------
-float alturaGarrafa   = 24;
+float alturaGarrafa   = 24.0;
 float diametroInterno = 6.7;
 int   pinoLDR         = 4;
-float raioInterno     = 6.7 / 2.0;
+float raioInterno     = diametroInterno / 2.0;
 
 float aguaInicial      = -1;
 float aguaUltimaMedida = -1;
@@ -27,15 +27,16 @@ const int PINO_BAT = 0;
 const float R1 = 10000.0;
 const float R2 = 10000.0;
 
-// ---------- Funções ----------
+// ---------- Limiar LDR ----------
+const int limiarEscuro = 10; // Ajuste conforme seu LDR
 
+// ---------- Funções de bateria e LDR ----------
 float lerBateriaVolts() {
   uint32_t mv = analogReadMilliVolts(PINO_BAT);
   float adcVolts = mv / 1000.0;
   return adcVolts * ((R1 + R2) / R2) - 0.1;
 }
 
-// Porcentagem real da LiPo
 float bateriaPercent(float v) {
   if (v >= 4.20) return 100.0;
   if (v <= 3.30) return 0.0;
@@ -61,55 +62,7 @@ float lerLDRPercent() {
   return valor / 4095.0 * 100.0;
 }
 
-// Leitura do VL53L0X
-String realizarLeituras() {
-  float somaDist = 0;
-  int leiturasValidas = 0;
-
-  for (int i = 0; i < 50; i++) {
-    VL53L0X_RangingMeasurementData_t measure;
-    lox.rangingTest(&measure, false);
-
-    if (measure.RangeStatus != 4) {
-      float d = measure.RangeMilliMeter / 10.0;
-      if (d < 0) d = 0;
-      somaDist += d;
-      leiturasValidas++;
-    }
-    delay(50);
-  }
-
-  if (leiturasValidas == 0) return "Nenhuma leitura válida obtida.";
-
-  float mediaDistancia = somaDist / leiturasValidas - 3.5;
-  if(mediaDistancia <= 5) mediaDistancia -= 1.2;
-  if(mediaDistancia >= 11) mediaDistancia += 1;
-  if (mediaDistancia >= 13.5) mediaDistancia += 1;
-  if (mediaDistancia >= 19) mediaDistancia += 1.5;
-
-  float alturaAgua = alturaGarrafa - mediaDistancia;
-  if (alturaAgua < 0) alturaAgua = 0;
-
-  float aguaNaGarrafa = 3.14159 * raioInterno * raioInterno * alturaAgua;
-
-  if (aguaInicial < 0)      aguaInicial      = aguaNaGarrafa;
-  if (aguaUltimaMedida < 0) aguaUltimaMedida = aguaNaGarrafa;
-
-  aguaUltimaMedida = aguaNaGarrafa;
-
-  float vbat   = lerBateriaVolts();
-  float pbat   = bateriaPercent(vbat);
-  float ldrPct = lerLDRPercent();
-
-  char buffer[200];
-  snprintf(buffer, sizeof(buffer),
-           "{\"distancia\":%.1f,\"volume\":%.1f,\"bateria_v\":%.2f,\"bateria_pct\":%.0f,\"ldr_pct\":%.1f}",
-           mediaDistancia, aguaNaGarrafa, vbat, pbat, ldrPct);
-
-  return String(buffer);
-}
-
-// ---------- Callbacks ----------
+// ---------- Callbacks BLE ----------
 class MyCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic *pChar) {
     String comando = pChar->getValue();
@@ -117,7 +70,8 @@ class MyCallbacks : public BLECharacteristicCallbacks {
     String resposta;
 
     if (comando == "1") {
-      resposta = realizarLeituras();
+      iniciarLeituras();
+      resposta = "Iniciando leituras...";
     } else {
       resposta = "Comando inválido. Envie '1' para leituras.";
     }
@@ -143,6 +97,88 @@ class MyServerCallbacks : public BLEServerCallbacks {
     pServer->getAdvertising()->start();
   }
 };
+
+// ---------- Variáveis do loop ----------
+unsigned long lastCheck = 0;
+
+// ---------- Máquina de estados LDR ----------
+enum EstadoCiclo { AGUARDANDO_LUZ, AGUARDANDO_ESCURO, LEITURA_FEITA };
+EstadoCiclo estadoCiclo = AGUARDANDO_LUZ;
+
+unsigned long tempoEscuro = 0;
+const unsigned long tempoEscuroNecessario = 10000; // 10s de escuro
+
+// ---------- Variáveis para leituras não bloqueantes ----------
+const int totalLeituras = 50;
+int leituraAtual = 0;
+float somaDist = 0;
+unsigned long ultimaLeitura = 0;
+bool lendo = false;
+
+// ---------- Funções de leituras não bloqueantes ----------
+void iniciarLeituras() {
+  leituraAtual = 0;
+  somaDist = 0;
+  ultimaLeitura = millis();
+  lendo = true;
+  Serial.println("Iniciando ciclo de leituras...");
+}
+
+void processarLeituras() {
+  if (!lendo) return;
+
+  if (millis() - ultimaLeitura >= 50) {
+    ultimaLeitura = millis();
+
+    VL53L0X_RangingMeasurementData_t measure;
+    lox.rangingTest(&measure, false);
+
+    if (measure.RangeStatus != 4) {
+      float d = measure.RangeMilliMeter / 10.0;
+      if (d < 0) d = 0;
+      somaDist += d;
+    }
+
+    leituraAtual++;
+
+    if (leituraAtual >= totalLeituras) {
+      // Calcular média e gerar JSON
+      float mediaDistancia = somaDist / totalLeituras - 3.8;
+      if(mediaDistancia <= 5) mediaDistancia -= 0.5;
+      if(mediaDistancia >= 11) mediaDistancia += 1;
+      if (mediaDistancia >= 13.5) mediaDistancia += 0.8;
+      if (mediaDistancia >= 17.2) mediaDistancia += 1.2;
+      if(mediaDistancia >= 19.8) mediaDistancia += 0.15;
+
+      float alturaAgua = alturaGarrafa - mediaDistancia;
+      if (alturaAgua < 0) alturaAgua = 0;
+
+      float aguaNaGarrafa = 3.14159 * raioInterno * raioInterno * alturaAgua;
+      if (aguaInicial < 0) aguaInicial = aguaNaGarrafa;
+      aguaUltimaMedida = aguaNaGarrafa;
+
+      float vbat   = lerBateriaVolts();
+      float pbat   = bateriaPercent(vbat);
+      float ldrPct = lerLDRPercent();
+
+      char buffer[200];
+      snprintf(buffer, sizeof(buffer),
+               "{\"distancia\":%.1f,\"volume\":%.1f,\"bateria_v\":%.2f,\"bateria_pct\":%.0f,\"ldr_pct\":%.1f}",
+               mediaDistancia, aguaNaGarrafa, vbat, pbat, ldrPct);
+
+      String dados = String(buffer);
+      Serial.println("Leitura automática realizada:");
+      Serial.println(dados);
+
+      if (pCharacteristic && pServer && pServer->getConnectedCount() > 0) {
+        pCharacteristic->setValue(dados.c_str());
+        pCharacteristic->notify();
+      }
+
+      lendo = false; // Ciclo finalizado
+    }
+  }
+}
 
 // ---------- Setup ----------
 void setup() {
@@ -199,17 +235,54 @@ void setup() {
 }
 
 // ---------- Loop ----------
-unsigned long lastCheck = 0;
-unsigned long lastLDR   = 0;
-
 void loop() {
-  // --- Verificação do server BLE ---
+  // --- BLE advertising ---
   if (millis() - lastCheck > 1000) {
     lastCheck = millis();
     if (pServer && pServer->getConnectedCount() == 0) {
       pServer->getAdvertising()->start();
-
     }
   }
 
+  // --- LDR leitura ---
+  int ldrValorBruto = analogRead(pinoLDR);
+  static float ldrValor = 0;
+  ldrValor = (ldrValor*3 + ldrValorBruto)/4; // média móvel simples
+  Serial.printf("LDR: %.1f (bruto: %d)\n", ldrValor, ldrValorBruto);
+
+  // --- Máquina de estados ciclo luz/escuro ---
+  switch (estadoCiclo) {
+    case AGUARDANDO_LUZ:
+      if (ldrValor > limiarEscuro) {
+        Serial.println("Luz suficiente detectada. Aguardando escuro...");
+        estadoCiclo = AGUARDANDO_ESCURO;
+      }
+      break;
+
+    case AGUARDANDO_ESCURO:
+      if (ldrValor <= limiarEscuro) { // escuro detectado
+        if (tempoEscuro == 0) {
+          tempoEscuro = millis();
+          Serial.println("Escuro detectado. Contando 10s...");
+        } else if (millis() - tempoEscuro >= tempoEscuroNecessario) {
+          Serial.println("Escuro confirmado. Iniciando leituras...");
+          iniciarLeituras();
+          estadoCiclo = LEITURA_FEITA;
+        }
+      } else {
+        tempoEscuro = 0; // volta a monitorar escuro
+      }
+      break;
+
+    case LEITURA_FEITA:
+      if (!lendo) {
+        Serial.println("Leitura finalizada. Voltando a monitorar luz...");
+        estadoCiclo = AGUARDANDO_LUZ;
+        tempoEscuro = 0;
+      }
+      break;
+  }
+
+  // --- Processa leituras não bloqueantes ---
+  processarLeituras();
 }
