@@ -29,20 +29,31 @@ const float R2 = 10000.0;
 
 // ---------- Funções ----------
 
-  float lerBateriaVolts() {
+float lerBateriaVolts() {
   uint32_t mv = analogReadMilliVolts(PINO_BAT);
   float adcVolts = mv / 1000.0;
-  return adcVolts * ((R1 + R2) / R2) -0.1;
+  return adcVolts * ((R1 + R2) / R2) - 0.1;
 }
 
-
+// Porcentagem real da LiPo
 float bateriaPercent(float v) {
-  if (v >= 4.0) return 100.0;
-  if (v < 3.0)  return 0.0;
-  int step = (int)((v - 3.0) / 0.1 + 0.5);
-  if (step > 9) step = 9;
-  if (step < 0) step = 0;
-  return step * 10.0;
+  if (v >= 4.20) return 100.0;
+  if (v <= 3.30) return 0.0;
+  struct PontoBat { float v; float pct; };
+  const PontoBat curva[] = {
+    {4.20,100},{4.10,90},{4.00,80},{3.90,70},
+    {3.80,60},{3.70,50},{3.60,40},{3.50,25},
+    {3.40,10},{3.30,0}
+  };
+  const int n = sizeof(curva)/sizeof(curva[0]);
+  for(int i=0;i<n-1;i++){
+    if(v<=curva[i].v && v>=curva[i+1].v){
+      float x0=curva[i+1].v, y0=curva[i+1].pct;
+      float x1=curva[i].v, y1=curva[i].pct;
+      return y0 + (v-x0)*(y1-y0)/(x1-x0);
+    }
+  }
+  return 0.0;
 }
 
 float lerLDRPercent() {
@@ -71,7 +82,10 @@ String realizarLeituras() {
   if (leiturasValidas == 0) return "Nenhuma leitura válida obtida.";
 
   float mediaDistancia = somaDist / leiturasValidas - 3.5;
-  if (mediaDistancia >= 21.1) mediaDistancia += 3.5;
+  if(mediaDistancia <= 5) mediaDistancia -= 1.2;
+  if(mediaDistancia >= 11) mediaDistancia += 1;
+  if (mediaDistancia >= 13.5) mediaDistancia += 1;
+  if (mediaDistancia >= 19) mediaDistancia += 1.5;
 
   float alturaAgua = alturaGarrafa - mediaDistancia;
   if (alturaAgua < 0) alturaAgua = 0;
@@ -170,6 +184,10 @@ void setup() {
   pAdvertising->setMinPreferred(0x06);
   pAdvertising->setMaxPreferred(0x12);
   pAdvertising->start();
+
+  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, ESP_PWR_LVL_N18);
+  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, ESP_PWR_LVL_N18);
+  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_SCAN, ESP_PWR_LVL_N18);
 
   delay(500);
   Serial.println("BLE pronto. Conecte pelo celular.");
