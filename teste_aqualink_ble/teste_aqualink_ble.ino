@@ -4,6 +4,7 @@
 #include <BLEUtils.h>
 #include <BLEServer.h>
 #include <driver/adc.h>
+#include "esp_task_wdt.h"
 
 // ---------- UUIDs BLE ----------
 #define SERVICE_UUID        "34303c72-4cb1-4d48-98cb-781afece9cd7"
@@ -67,16 +68,16 @@ class MyCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic *pChar) {
     String comando = pChar->getValue();
     comando.trim();
-    String resposta;
+    const char *resposta;
 
     if (comando == "1") {
       iniciarLeituras();
       resposta = "Iniciando leituras...";
     } else {
-      resposta = "Comando inválido. Envie '1' para leituras.";
+      resposta = "Comando invalido.";
     }
 
-    pChar->setValue(resposta.c_str());
+    pChar->setValue(resposta);
     pChar->notify();
 
     Serial.println("Resposta enviada via BLE:");
@@ -100,13 +101,15 @@ class MyServerCallbacks : public BLEServerCallbacks {
 
 // ---------- Variáveis do loop ----------
 unsigned long lastCheck = 0;
+unsigned long lastBLEReset = 0;
+const unsigned long BLE_RESET_INTERVAL = 60000; 
 
 // ---------- Máquina de estados LDR ----------
 enum EstadoCiclo { AGUARDANDO_LUZ, AGUARDANDO_ESCURO, LEITURA_FEITA };
 EstadoCiclo estadoCiclo = AGUARDANDO_LUZ;
 
 unsigned long tempoEscuro = 0;
-const unsigned long tempoEscuroNecessario = 10000; // 10s de escuro
+const unsigned long tempoEscuroNecessario = 10000; // 10s
 
 // ---------- Variáveis para leituras não bloqueantes ----------
 const int totalLeituras = 50;
@@ -115,7 +118,7 @@ float somaDist = 0;
 unsigned long ultimaLeitura = 0;
 bool lendo = false;
 
-// ---------- Funções de leituras não bloqueantes ----------
+// ---------- Funções de leituras ----------
 void iniciarLeituras() {
   leituraAtual = 0;
   somaDist = 0;
@@ -142,7 +145,6 @@ void processarLeituras() {
     leituraAtual++;
 
     if (leituraAtual >= totalLeituras) {
-      // Calcular média e gerar JSON
       float mediaDistancia = somaDist / totalLeituras - 3.8;
       if(mediaDistancia <= 5) mediaDistancia -= 0.5;
       if(mediaDistancia >= 11) mediaDistancia += 1;
@@ -166,16 +168,15 @@ void processarLeituras() {
                "{\"distancia\":%.1f,\"volume\":%.1f,\"bateria_v\":%.2f,\"bateria_pct\":%.0f,\"ldr_pct\":%.1f}",
                mediaDistancia, aguaNaGarrafa, vbat, pbat, ldrPct);
 
-      String dados = String(buffer);
       Serial.println("Leitura automática realizada:");
-      Serial.println(dados);
+      Serial.println(buffer);
 
       if (pCharacteristic && pServer && pServer->getConnectedCount() > 0) {
-        pCharacteristic->setValue(dados.c_str());
+        pCharacteristic->setValue(buffer);
         pCharacteristic->notify();
       }
 
-      lendo = false; // Ciclo finalizado
+      lendo = false;
     }
   }
 }
@@ -194,6 +195,16 @@ void setup() {
   analogSetPinAttenuation(PINO_BAT, ADC_11db);
   analogSetPinAttenuation(pinoLDR, ADC_11db);
 
+  // --- Watchdog ---
+  esp_task_wdt_config_t wdt_config = {
+      .timeout_ms = 10000,
+      .idle_core_mask = 0,
+      .trigger_panic = true
+  };
+  esp_task_wdt_init(&wdt_config);
+  esp_task_wdt_add(NULL);
+
+  // --- BLE ---
   BLEDevice::init("ESP32C3_AquaLink");
   BLEDevice::setMTU(517);
 
@@ -207,10 +218,8 @@ void setup() {
     BLECharacteristic::PROPERTY_WRITE |
     BLECharacteristic::PROPERTY_NOTIFY
   );
-
   pCharacteristic->setValue("Pronto para comandos: '1' = leituras");
   pCharacteristic->setCallbacks(new MyCallbacks());
-
   pService->start();
 
   BLEAdvertising *pAdvertising = pServer->getAdvertising();
@@ -221,9 +230,10 @@ void setup() {
   pAdvertising->setMaxPreferred(0x12);
   pAdvertising->start();
 
-  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, ESP_PWR_LVL_N18);
-  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, ESP_PWR_LVL_N18);
-  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_SCAN, ESP_PWR_LVL_N18);
+  // --- Potência BLE ---
+  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, ESP_PWR_LVL_P3);
+  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, ESP_PWR_LVL_P3);
+  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_SCAN, ESP_PWR_LVL_P3);
 
   delay(500);
   Serial.println("BLE pronto. Conecte pelo celular.");
@@ -236,53 +246,96 @@ void setup() {
 
 // ---------- Loop ----------
 void loop() {
-  // --- BLE advertising ---
+  esp_task_wdt_reset();
+
+  // --- BLE advertising contínuo + recuperação ---
   if (millis() - lastCheck > 1000) {
     lastCheck = millis();
+
     if (pServer && pServer->getConnectedCount() == 0) {
-      pServer->getAdvertising()->start();
+      BLEAdvertising *adv = pServer->getAdvertising();
+
+      if (!adv->isAdvertising()) {
+        static int tentativasFalha = 0;
+        adv->start();
+        delay(200);
+
+        if (!adv->isAdvertising()) {
+          tentativasFalha++;
+          Serial.printf("Falha ao iniciar advertising (%d)\n", tentativasFalha);
+
+          if (tentativasFalha >= 3) {
+            Serial.println("BLE travado, reiniciando ESP...");
+            esp_restart();
+          }
+        } else {
+          tentativasFalha = 0;
+        }
+      }
     }
   }
 
-  // --- LDR leitura ---
+  // --- Reset da stack BLE a cada 2 minutos ---
+  if (millis() - lastBLEReset > BLE_RESET_INTERVAL) {
+    lastBLEReset = millis();
+
+    if (pServer && pServer->getConnectedCount() == 0) {
+      Serial.println("Reiniciando stack BLE preventivamente...");
+      BLEDevice::deinit(true);
+      BLEDevice::init("ESP32C3_AquaLink");
+
+      pServer = BLEDevice::createServer();
+      pServer->setCallbacks(new MyServerCallbacks());
+
+      BLEService *pService = pServer->createService(SERVICE_UUID);
+      pCharacteristic = pService->createCharacteristic(
+        CHARACTERISTIC_UUID,
+        BLECharacteristic::PROPERTY_READ |
+        BLECharacteristic::PROPERTY_WRITE |
+        BLECharacteristic::PROPERTY_NOTIFY
+      );
+
+      pCharacteristic->setValue("Reiniciado.");
+      pCharacteristic->setCallbacks(new MyCallbacks());
+      pService->start();
+
+      BLEAdvertising *pAdvertising = pServer->getAdvertising();
+      pAdvertising->setScanResponse(true);
+      pAdvertising->addServiceUUID(SERVICE_UUID);
+      pAdvertising->setName("ESP32C3_AquaLink");
+      pAdvertising->start();
+
+      Serial.println("Stack BLE reiniciada com sucesso.");
+    }
+  }
+
+  // --- Máquina de estados ---
   int ldrValorBruto = analogRead(pinoLDR);
   static float ldrValor = 0;
-  ldrValor = (ldrValor*3 + ldrValorBruto)/4; // média móvel simples
-  Serial.printf("LDR: %.1f (bruto: %d)\n", ldrValor, ldrValorBruto);
+  ldrValor = (ldrValor*3 + ldrValorBruto)/4;
 
-  // --- Máquina de estados ciclo luz/escuro ---
   switch (estadoCiclo) {
     case AGUARDANDO_LUZ:
-      if (ldrValor > limiarEscuro) {
-        Serial.println("Luz suficiente detectada. Aguardando escuro...");
-        estadoCiclo = AGUARDANDO_ESCURO;
-      }
+      if (ldrValor > limiarEscuro) estadoCiclo = AGUARDANDO_ESCURO;
       break;
 
     case AGUARDANDO_ESCURO:
-      if (ldrValor <= limiarEscuro) { // escuro detectado
-        if (tempoEscuro == 0) {
-          tempoEscuro = millis();
-          Serial.println("Escuro detectado. Contando 10s...");
-        } else if (millis() - tempoEscuro >= tempoEscuroNecessario) {
-          Serial.println("Escuro confirmado. Iniciando leituras...");
+      if (ldrValor <= limiarEscuro) {
+        if (tempoEscuro == 0) tempoEscuro = millis();
+        else if (millis() - tempoEscuro >= tempoEscuroNecessario) {
           iniciarLeituras();
           estadoCiclo = LEITURA_FEITA;
         }
-      } else {
-        tempoEscuro = 0; // volta a monitorar escuro
-      }
+      } else tempoEscuro = 0;
       break;
 
     case LEITURA_FEITA:
       if (!lendo) {
-        Serial.println("Leitura finalizada. Voltando a monitorar luz...");
         estadoCiclo = AGUARDANDO_LUZ;
         tempoEscuro = 0;
       }
       break;
   }
 
-  // --- Processa leituras não bloqueantes ---
   processarLeituras();
 }
