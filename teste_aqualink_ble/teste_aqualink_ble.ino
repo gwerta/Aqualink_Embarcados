@@ -148,9 +148,10 @@ void processarLeituras() {
       float mediaDistancia = somaDist / totalLeituras - 3.8;
       if(mediaDistancia <= 5) mediaDistancia -= 0.5;
       if(mediaDistancia >= 11) mediaDistancia += 1;
-      if (mediaDistancia >= 13.5) mediaDistancia += 0.8;
-      if (mediaDistancia >= 17.2) mediaDistancia += 1.2;
-      if(mediaDistancia >= 19.8) mediaDistancia += 0.15;
+      if (mediaDistancia >= 13.5) mediaDistancia += 1.2;
+      if(mediaDistancia >= 16) mediaDistancia += 0.5;
+      if (mediaDistancia >= 17.2) mediaDistancia += 0.7;
+      if(mediaDistancia >= 19.8) mediaDistancia -= 0.35;
 
       float alturaAgua = alturaGarrafa - mediaDistancia;
       if (alturaAgua < 0) alturaAgua = 0;
@@ -275,7 +276,7 @@ void loop() {
     }
   }
 
-  // --- Reset da stack BLE a cada 2 minutos ---
+
   if (millis() - lastBLEReset > BLE_RESET_INTERVAL) {
     lastBLEReset = millis();
 
