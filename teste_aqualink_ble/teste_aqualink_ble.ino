@@ -231,10 +231,6 @@ void setup() {
   pAdvertising->setMaxPreferred(0x12);
   pAdvertising->start();
 
-  // --- Potência BLE ---
-  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, ESP_PWR_LVL_P3);
-  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, ESP_PWR_LVL_P3);
-  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_SCAN, ESP_PWR_LVL_P3);
 
   delay(500);
   Serial.println("BLE pronto. Conecte pelo celular.");
@@ -283,6 +279,7 @@ void loop() {
     if (pServer && pServer->getConnectedCount() == 0) {
       Serial.println("Reiniciando stack BLE preventivamente...");
       BLEDevice::deinit(true);
+      delay(2000);
       BLEDevice::init("ESP32C3_AquaLink");
 
       pServer = BLEDevice::createServer();
