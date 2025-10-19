@@ -29,33 +29,48 @@ const float R1 = 10000.0;
 const float R2 = 10000.0;
 
 // ---------- Limiar LDR ----------
-const int limiarEscuro = 10; // Ajuste conforme seu LDR
+const int limiarEscuro = 10;
 
 // ---------- Funções de bateria e LDR ----------
 float lerBateriaVolts() {
   uint32_t mv = analogReadMilliVolts(PINO_BAT);
   float adcVolts = mv / 1000.0;
-  return adcVolts * ((R1 + R2) / R2) - 0.1;
+  return adcVolts * ((R1 + R2) / R2);
 }
 
+struct BatPoint { float v; int pct; };
+const BatPoint batTable[] = {
+  {4.10, 100},
+  {4.05, 95},
+  {4.00, 90},
+  {3.95, 82},
+  {3.90, 74},
+  {3.85, 64},
+  {3.80, 55},
+  {3.75, 45},
+  {3.70, 35},
+  {3.60, 18},
+  {3.50, 8},
+  {3.40, 0}
+};
+const int BAT_TABLE_N = sizeof(batTable)/sizeof(batTable[0]);
+
 float bateriaPercent(float v) {
-  if (v >= 4.20) return 100.0;
-  if (v <= 3.30) return 0.0;
-  struct PontoBat { float v; float pct; };
-  const PontoBat curva[] = {
-    {4.20,100},{4.10,90},{4.00,80},{3.90,70},
-    {3.80,60},{3.70,50},{3.60,40},{3.50,25},
-    {3.40,10},{3.30,0}
-  };
-  const int n = sizeof(curva)/sizeof(curva[0]);
-  for(int i=0;i<n-1;i++){
-    if(v<=curva[i].v && v>=curva[i+1].v){
-      float x0=curva[i+1].v, y0=curva[i+1].pct;
-      float x1=curva[i].v, y1=curva[i].pct;
-      return y0 + (v-x0)*(y1-y0)/(x1-x0);
+  if (v <= batTable[BAT_TABLE_N-1].v) return 0.0f;
+  if (v >= batTable[0].v) return 100.0f;
+
+  for (int i = 0; i < BAT_TABLE_N - 1; ++i) {
+    float v_hi = batTable[i].v;
+    float v_lo = batTable[i+1].v;
+    int p_hi = batTable[i].pct;
+    int p_lo = batTable[i+1].pct;
+    if (v <= v_hi && v >= v_lo) {
+      float t = (v - v_lo) / (v_hi - v_lo);
+      float pct = p_lo + t * (p_hi - p_lo);
+      return pct;
     }
   }
-  return 0.0;
+  return 0.0f;
 }
 
 float lerLDRPercent() {
@@ -109,16 +124,16 @@ enum EstadoCiclo { AGUARDANDO_LUZ, AGUARDANDO_ESCURO, LEITURA_FEITA };
 EstadoCiclo estadoCiclo = AGUARDANDO_LUZ;
 
 unsigned long tempoEscuro = 0;
-const unsigned long tempoEscuroNecessario = 10000; // 10s
+const unsigned long tempoEscuroNecessario = 10000;
 
-// ---------- Variáveis para leituras não bloqueantes ----------
+// ---------- Leituras ----------
 const int totalLeituras = 50;
 int leituraAtual = 0;
 float somaDist = 0;
 unsigned long ultimaLeitura = 0;
 bool lendo = false;
 
-// ---------- Funções de leituras ----------
+// ---------- Funções ----------
 void iniciarLeituras() {
   leituraAtual = 0;
   somaDist = 0;
@@ -138,25 +153,31 @@ void processarLeituras() {
 
     if (measure.RangeStatus != 4) {
       float d = measure.RangeMilliMeter / 10.0;
-      if (d < 0) d = 0;
-      somaDist += d;
-    }
 
-    leituraAtual++;
+      // ---- FILTRO: ignora leituras acima de 30 cm ----
+      if (d <= 30.0) {
+        somaDist += d;
+        leituraAtual++;
+      } else {
+        Serial.printf("Leitura acima de 30 cm (%.1f cm), ignorada.\n", d);
+        return;
+      }
+    }
 
     if (leituraAtual >= totalLeituras) {
       float mediaDistancia = somaDist / totalLeituras - 3.8;
+
+      // Ajustes empíricos
       if(mediaDistancia <= 5) mediaDistancia -= 0.5;
       if(mediaDistancia >= 11) mediaDistancia += 1;
       if (mediaDistancia >= 13.5) mediaDistancia += 1.2;
       if(mediaDistancia >= 16) mediaDistancia += 0.5;
-      if (mediaDistancia >= 17.2) mediaDistancia += 0.7;
-      if(mediaDistancia >= 19.8) mediaDistancia -= 0.35;
+      if (mediaDistancia >= 17.2) mediaDistancia += 1;
+      if(mediaDistancia >= 19.8) mediaDistancia += 0.6;
 
       float alturaAgua = alturaGarrafa - mediaDistancia;
-      if (alturaAgua < 0) alturaAgua = 0;
-
       float aguaNaGarrafa = 3.14159 * raioInterno * raioInterno * alturaAgua;
+
       if (aguaInicial < 0) aguaInicial = aguaNaGarrafa;
       aguaUltimaMedida = aguaNaGarrafa;
 
@@ -196,7 +217,6 @@ void setup() {
   analogSetPinAttenuation(PINO_BAT, ADC_11db);
   analogSetPinAttenuation(pinoLDR, ADC_11db);
 
-  // --- Watchdog ---
   esp_task_wdt_config_t wdt_config = {
       .timeout_ms = 10000,
       .idle_core_mask = 0,
@@ -205,9 +225,10 @@ void setup() {
   esp_task_wdt_init(&wdt_config);
   esp_task_wdt_add(NULL);
 
-  // --- BLE ---
   BLEDevice::init("ESP32C3_AquaLink");
   BLEDevice::setMTU(517);
+  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, ESP_PWR_LVL_N9);
+  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, ESP_PWR_LVL_N9);
 
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
@@ -231,7 +252,6 @@ void setup() {
   pAdvertising->setMaxPreferred(0x12);
   pAdvertising->start();
 
-
   delay(500);
   Serial.println("BLE pronto. Conecte pelo celular.");
 
@@ -245,7 +265,6 @@ void setup() {
 void loop() {
   esp_task_wdt_reset();
 
-  // --- BLE advertising contínuo + recuperação ---
   if (millis() - lastCheck > 1000) {
     lastCheck = millis();
 
@@ -271,7 +290,6 @@ void loop() {
       }
     }
   }
-
 
   if (millis() - lastBLEReset > BLE_RESET_INTERVAL) {
     lastBLEReset = millis();
@@ -307,7 +325,6 @@ void loop() {
     }
   }
 
-  // --- Máquina de estados ---
   int ldrValorBruto = analogRead(pinoLDR);
   static float ldrValor = 0;
   ldrValor = (ldrValor*3 + ldrValorBruto)/4;
