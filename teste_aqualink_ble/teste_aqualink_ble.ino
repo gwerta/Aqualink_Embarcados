@@ -110,7 +110,7 @@ void iniciarLeituras() {
 
 // ---------- Função processarLeituras (modificada) ----------
 void processarLeituras() {
-  static int leiturasInvalidas = 0; 
+  static int leiturasInvalidas = 0;
 
   if (!lendo) return;
 
@@ -119,38 +119,48 @@ void processarLeituras() {
     VL53L0X_RangingMeasurementData_t measure;
     lox.rangingTest(&measure, false);
 
-    float d = measure.RangeMilliMeter / 10.0; 
+    float d = measure.RangeMilliMeter / 10.0;
 
- 
-    if (d > 29.0 || d > 500.0 || d <= 0) {
+    // --- Verificação robusta ---
+    bool leituraRuim = false;
+
+    if (measure.RangeStatus != 0) leituraRuim = true;                 
+    else if (d > 29.0) {                                        
+      Serial.printf(" Medida fora da garrafa (%.1f cm). Ciclo cancelado.\n", d);
+      if (pCharacteristic && pServer && pServer->getConnectedCount() > 0) {
+        pCharacteristic->setValue("{\"aviso\":\"medida fora da garrafa\"}");
+        pCharacteristic->notify();
+      }
+      lendo = false;
+      leiturasInvalidas = 0;
+      return;
+    }
+
+    if (leituraRuim) {
       leiturasInvalidas++;
       Serial.printf(" Leitura inválida (%.1f cm). Contagem: %d/5\n", d, leiturasInvalidas);
-
-    
       if (leiturasInvalidas >= 5) {
-        Serial.println(" Leituras inválidas consecutivas. Ciclo cancelado.");
+        Serial.println("Leituras inválidas consecutivas. Ciclo cancelado.");
         if (pCharacteristic && pServer && pServer->getConnectedCount() > 0) {
           pCharacteristic->setValue("{\"aviso\":\"leituras inválidas consecutivas\"}");
           pCharacteristic->notify();
         }
         lendo = false;
-        leiturasInvalidas = 0; 
+        leiturasInvalidas = 0;
       }
-      return; 
+      return;
     }
 
- 
+    //  leitura boa → zera contador
     leiturasInvalidas = 0;
 
-    // acumula leitura válida
+    // --- Cálculo normal ---
     somaDist += d;
     leituraAtual++;
 
-    // finaliza ciclo após totalLeituras válidas
     if (leituraAtual >= totalLeituras) {
       float mediaDistancia = somaDist / leituraAtual - 3.6;
 
-      // ajustes de calibração
       if(mediaDistancia <= 5.2) mediaDistancia -= 1;
       if(mediaDistancia <= 8.4) mediaDistancia -= 1;
       if(mediaDistancia <= 10.2) mediaDistancia -= 0.25;
@@ -175,7 +185,7 @@ void processarLeituras() {
                "\"bateria_pct\":%.0f,\"ldr_pct\":%.1f}",
                mediaDistancia, aguaNaGarrafa, vbat, pbat, ldrPct);
 
-      Serial.println("✅ Leitura automática realizada:");
+      Serial.println(" Leitura automática realizada:");
       Serial.println(buffer);
 
       if (pCharacteristic && pServer && pServer->getConnectedCount() > 0) {
@@ -187,6 +197,7 @@ void processarLeituras() {
     }
   }
 }
+
 
 
 
