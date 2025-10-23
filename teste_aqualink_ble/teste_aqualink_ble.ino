@@ -161,9 +161,7 @@ void processarLeituras() {
     if (leituraAtual >= totalLeituras) {
       float mediaDistancia = somaDist / leituraAtual - 3.6;
 
-      if(mediaDistancia <= 5.2) mediaDistancia -= 1;
-      if(mediaDistancia <= 8.4) mediaDistancia -= 1;
-      if(mediaDistancia <= 10.2) mediaDistancia -= 0.25;
+      if(mediaDistancia <= 5.2) mediaDistancia -= 1.25;
       if (mediaDistancia >= 11) mediaDistancia += 1.2;
       if(mediaDistancia >= 13.7) mediaDistancia += 0.5;
       if (mediaDistancia >= 17.2) mediaDistancia += 1;
