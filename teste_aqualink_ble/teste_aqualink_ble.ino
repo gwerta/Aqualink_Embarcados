@@ -3,6 +3,7 @@
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEServer.h>
+#include <BLE2902.h>
 #include <driver/adc.h>
 #include "esp_task_wdt.h"
 #include "WiFi.h"
@@ -17,7 +18,7 @@ BLECharacteristic *pCharacteristic;
 BLEAdvertising *pAdvertising;
 const char* BLE_DEVICE_NAME = "ESP32C3_AquaLink";
 
-static bool advertisingAtivo = false; // controle manual de advertising
+static bool advertisingAtivo = false;
 
 // ---------- Sensor garrafa ----------
 float alturaGarrafa   = 24.0;
@@ -70,8 +71,8 @@ float lerBateriaVolts() {
 
 struct BatPoint { float v; int pct; };
 const BatPoint batTable[] = {
-  {4.10, 100}, {4.05, 95}, {4.00, 90}, {3.95, 82}, {3.90, 74}, 
-  {3.85, 64}, {3.80, 55}, {3.75, 45}, {3.70, 35}, {3.60, 18}, 
+  {4.10, 100}, {4.05, 95}, {4.00, 90}, {3.95, 82}, {3.90, 74},
+  {3.85, 64}, {3.80, 55}, {3.75, 45}, {3.70, 35}, {3.60, 18},
   {3.50, 8}, {3.40, 0}
 };
 const int BAT_TABLE_N = sizeof(batTable)/sizeof(batTable[0]);
@@ -107,7 +108,10 @@ void iniciarLeituras() {
   Serial.println("Iniciando ciclo de leituras...");
 }
 
+// ---------- Função processarLeituras (modificada) ----------
 void processarLeituras() {
+  static int leiturasInvalidas = 0; 
+
   if (!lendo) return;
 
   if (millis() - ultimaLeitura >= 50) {
@@ -115,26 +119,45 @@ void processarLeituras() {
     VL53L0X_RangingMeasurementData_t measure;
     lox.rangingTest(&measure, false);
 
-    if (measure.RangeStatus != 4) {
-      float d = measure.RangeMilliMeter / 10.0;
-      if (d <= 30.0) {
-        somaDist += d;
-        leituraAtual++;
-      } else {
-        Serial.printf("Leitura acima de 30 cm (%.1f cm), ignorada.\n", d);
-        return;
+    float d = measure.RangeMilliMeter / 10.0; 
+
+ 
+    if (d > 29.0 || d > 500.0 || d <= 0) {
+      leiturasInvalidas++;
+      Serial.printf(" Leitura inválida (%.1f cm). Contagem: %d/5\n", d, leiturasInvalidas);
+
+    
+      if (leiturasInvalidas >= 5) {
+        Serial.println(" Leituras inválidas consecutivas. Ciclo cancelado.");
+        if (pCharacteristic && pServer && pServer->getConnectedCount() > 0) {
+          pCharacteristic->setValue("{\"aviso\":\"leituras inválidas consecutivas\"}");
+          pCharacteristic->notify();
+        }
+        lendo = false;
+        leiturasInvalidas = 0; 
       }
+      return; 
     }
 
-    if (leituraAtual >= totalLeituras) {
-      float mediaDistancia = somaDist / totalLeituras - 3.8;
+ 
+    leiturasInvalidas = 0;
 
-      if(mediaDistancia <= 5) mediaDistancia -= 0.5;
-      if(mediaDistancia >= 11) mediaDistancia += 1;
-      if (mediaDistancia >= 13.5) mediaDistancia += 1.2;
-      if(mediaDistancia >= 16) mediaDistancia += 0.5;
+    // acumula leitura válida
+    somaDist += d;
+    leituraAtual++;
+
+    // finaliza ciclo após totalLeituras válidas
+    if (leituraAtual >= totalLeituras) {
+      float mediaDistancia = somaDist / leituraAtual - 3.6;
+
+      // ajustes de calibração
+      if(mediaDistancia <= 5.2) mediaDistancia -= 1;
+      if(mediaDistancia <= 8.4) mediaDistancia -= 1;
+      if(mediaDistancia <= 10.2) mediaDistancia -= 0.25;
+      if (mediaDistancia >= 11) mediaDistancia += 1.2;
+      if(mediaDistancia >= 13.7) mediaDistancia += 0.5;
       if (mediaDistancia >= 17.2) mediaDistancia += 1;
-      if (mediaDistancia >= 19.7) mediaDistancia += 0.6;
+      if(mediaDistancia >= 19.7) mediaDistancia += 0.6;
 
       float alturaAgua = alturaGarrafa - mediaDistancia;
       float aguaNaGarrafa = 3.14159 * raioInterno * raioInterno * alturaAgua;
@@ -148,10 +171,11 @@ void processarLeituras() {
 
       char buffer[200];
       snprintf(buffer, sizeof(buffer),
-               "{\"distancia\":%.1f,\"volume\":%.1f,\"bateria_v\":%.2f,\"bateria_pct\":%.0f,\"ldr_pct\":%.1f}",
+               "{\"distancia\":%.1f,\"volume\":%.1f,\"bateria_v\":%.2f,"
+               "\"bateria_pct\":%.0f,\"ldr_pct\":%.1f}",
                mediaDistancia, aguaNaGarrafa, vbat, pbat, ldrPct);
 
-      Serial.println("Leitura automática realizada:");
+      Serial.println("✅ Leitura automática realizada:");
       Serial.println(buffer);
 
       if (pCharacteristic && pServer && pServer->getConnectedCount() > 0) {
@@ -164,10 +188,13 @@ void processarLeituras() {
   }
 }
 
+
+
+
 // ---------- Callbacks BLE ----------
 class MyCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic *pChar) {
-    String comando = String(pChar->getValue().c_str()); 
+    String comando = String(pChar->getValue().c_str());
     comando.trim();
     const char *resposta;
 
@@ -189,12 +216,12 @@ class MyCallbacks : public BLECharacteristicCallbacks {
 
 class MyServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer *pServer) {
-    Serial.println("✅ Dispositivo conectado!");
+    Serial.println(" Dispositivo conectado!");
     advertisingAtivo = false;
   }
 
   void onDisconnect(BLEServer *pServer) {
-    Serial.println("⚠️ Dispositivo desconectado! Reiniciando advertising...");
+    Serial.println(" Dispositivo desconectado! Reiniciando advertising...");
     delay(100);
     float vbat  = lerBateriaVolts();
     float pbat  = bateriaPercent(vbat);
@@ -210,7 +237,7 @@ class MyServerCallbacks : public BLEServerCallbacks {
 // ---------- Fail-safe Timer ----------
 void IRAM_ATTR onTimer() {
   if (pServer && pServer->getConnectedCount() == 0) {
-    Serial.println("⏱️ Reboot forçado por timer (fail-safe - BLE desconectado).");
+    Serial.println(" Reboot forçado por timer (fail-safe - BLE desconectado).");
     esp_restart();
   } else {
     timerWrite(timerReboot, 0);
@@ -243,8 +270,8 @@ void setup() {
   timerAlarmEnable(timerReboot);
 
   // --- Inicializa BLE ---
-  BLEDevice::init(BLE_DEVICE_NAME); 
-  BLEDevice::setPower(ESP_PWR_LVL_N9); 
+  BLEDevice::init(BLE_DEVICE_NAME);
+  BLEDevice::setPower(ESP_PWR_LVL_N9);
   BLEDevice::setMTU(SAFE_MTU);
 
   pServer = BLEDevice::createServer();
@@ -257,6 +284,10 @@ void setup() {
     BLECharacteristic::PROPERTY_WRITE |
     BLECharacteristic::PROPERTY_NOTIFY
   );
+
+  // 🔧 descritor obrigatório para ativar notificações no nRF Connect
+  pCharacteristic->addDescriptor(new BLE2902());
+
   pCharacteristic->setValue("Pronto para comandos: '1' = leituras");
   pCharacteristic->setCallbacks(new MyCallbacks());
   pService->start();
@@ -264,8 +295,8 @@ void setup() {
   pAdvertising = pServer->getAdvertising();
   pAdvertising->setScanResponse(true);
   pAdvertising->addServiceUUID(SERVICE_UUID);
-  pAdvertising->setMinPreferred(0x06); 
-  pAdvertising->setMaxPreferred(0x12); 
+  pAdvertising->setMinPreferred(0x06);
+  pAdvertising->setMaxPreferred(0x12);
   pAdvertising->start();
 
   advertisingAtivo = true;
@@ -277,17 +308,15 @@ void setup() {
 void loop() {
   esp_task_wdt_reset();
 
-  // Monitora o estado do BLE a cada 2s
   if (millis() - lastCheck > BLE_MONITOR_INTERVAL) {
     lastCheck = millis();
     if (pServer && pServer->getConnectedCount() == 0 && !advertisingAtivo) {
-      Serial.println("🔄 Advertising inativo. Tentando reiniciar...");
+      Serial.println(" Advertising inativo. Tentando reiniciar...");
       pAdvertising->start();
       advertisingAtivo = true;
     }
   }
 
-  // Máquina de estados LDR
   int ldrValorBruto = analogRead(pinoLDR);
   static float ldrValor = 0;
   ldrValor = (ldrValor * 3 + ldrValorBruto) / 4;
