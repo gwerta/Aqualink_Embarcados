@@ -47,7 +47,7 @@ unsigned long lastCheck = 0;
 const unsigned long BLE_MONITOR_INTERVAL = 2000; // 2s
 
 hw_timer_t *timerReboot = NULL;
-const unsigned long FAILSAFE_INTERVAL_MS = 20 * 60 * 1000UL; // 20 min
+const unsigned long FAILSAFE_INTERVAL_MS = 10 * 60 * 1000UL; // 10 min
 
 // ---------- Máquina de estados LDR ----------
 enum EstadoCiclo { AGUARDANDO_LUZ, AGUARDANDO_ESCURO, LEITURA_FEITA };
@@ -169,6 +169,16 @@ void processarLeituras() {
 
       float alturaAgua = alturaGarrafa - mediaDistancia;
       float aguaNaGarrafa = 3.14159 * raioInterno * raioInterno * alturaAgua;
+
+      if (aguaNaGarrafa < 0){
+
+        aguaNaGarrafa = 0;
+
+      }else if(aguaNaGarrafa > 900){
+
+        aguaNaGarrafa = 900;
+
+      }
 
       if (aguaInicial < 0) aguaInicial = aguaNaGarrafa;
       aguaUltimaMedida = aguaNaGarrafa;
